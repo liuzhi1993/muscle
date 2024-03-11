@@ -4,7 +4,7 @@ Title: MUSCLE
 Version: 0.1.0
 Author: Zhi Liu
 Maintainer: Zhi Liu <zhi.liu@uni-goettingen.de>
-Description: Idealization with MUSCLE.
+Description: Multiscale quantile segmentation with local error control.
 License: GPL-3
 Encoding: UTF-8
 LazyData: true
