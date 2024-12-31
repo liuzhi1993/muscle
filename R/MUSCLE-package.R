@@ -498,7 +498,7 @@ simulQuantile_MUSCLE = function(n, alpha = 0.1, beta = 0.5, exact = FALSE, lambd
       sd = 1 / sqrt(sum(Kernel^2))
       data = matrix(0,r,n)
       ACF = convolve(Kernel,Kernel, type = "open")[lag:(2*lag-1)]
-      ACF = ACF/lagax(ACF)
+      ACF = ACF/max(ACF)
       for (i in 1:r) {
         X = rnorm(n+lag-1,0,sd)
         X_tilde = Re(fft(fft(X)*Kernelfft,inverse = TRUE))[lag:(n+lag-1)]
