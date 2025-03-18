@@ -482,7 +482,7 @@ simulQuantile_MUSCLE = function(n, alpha = 0.1, beta = 0.5, exact = FALSE, lambd
           return(10*((alpha-0.8)*q_30000_0_9_0_5[1:n]+(0.9-alpha)*q_30000_0_8_0_5[1:n]))
         }
       }else if(alpha == 0.9){
-        return(q_30000_0_6_0_5[1:n])
+        return(q_30000_0_9_0_5[1:n])
       }else{
         return(.simulQuantile_MUSCLE(1-alpha, n, beta))
       }
