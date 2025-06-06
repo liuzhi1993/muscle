@@ -920,7 +920,7 @@ List DMUSCLE(NumericVector &Y, NumericVector &q, double beta, int lag, bool test
 
 // [[Rcpp::export(.MMUSCLE)]]
 List MMUSCLE(NumericVector &Y, NumericMatrix &q_matrix, NumericVector & beta_vec, bool test, bool details){
-   //Rcout << "MUSCLE is running, please wait!\n";
+   Rcout << "MMUSCLE is running, please wait!\n";
    int num_beta = beta_vec.size();
    int n = Y.size();
    int imax,lq_max_idx, uq_max_idx,idx,power,l;
