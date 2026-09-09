@@ -2,8 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{simulQuantile_MMUSCLE}
 \alias{simulQuantile_MMUSCLE}
-\title{Simulate MMUSCLE quantiles
-Simulate MMUSCLE quantiles.}
+\title{Simulate MMUSCLE quantiles.}
 \usage{
 simulQuantile_MMUSCLE(n, alpha = 0.1, beta_vec = c(0.25, 0.5, 0.75))
 }
@@ -16,6 +15,5 @@ simulQuantile_MMUSCLE(n, alpha = 0.1, beta_vec = c(0.25, 0.5, 0.75))
 0.5 and 0.75 stand for first quartile, median and third quartile respectively.}
 }
 \description{
-Simulate MMUSCLE quantiles
 Simulate MMUSCLE quantiles.
 }

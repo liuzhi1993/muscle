@@ -7,6 +7,6 @@
 # * https://testthat.r-lib.org/reference/test_package.html#special-files
 
 library(testthat)
-library(muscle)
+library(musclePST)
 
-test_check("muscle")
+test_check("musclePST")

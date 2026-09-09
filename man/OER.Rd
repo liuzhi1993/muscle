@@ -2,8 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{OER}
 \alias{OER}
-\title{Over estimation rate
-Compute over estimation rate (OER) of change points estimation.}
+\title{Compute over estimation rate (OER) of change points estimation.}
 \usage{
 OER(left, left_hat)
 }
@@ -13,6 +12,5 @@ OER(left, left_hat)
 \item{left_hat}{estimated change points.}
 }
 \description{
-Over estimation rate
 Compute over estimation rate (OER) of change points estimation.
 }

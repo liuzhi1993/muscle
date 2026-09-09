@@ -2,7 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{simulQuantile_MUSCLE}
 \alias{simulQuantile_MUSCLE}
-\title{Simulate MUSCLE quantiles}
+\title{Simulate MUSCLE and D-MUSCLE quantiles}
 \usage{
 simulQuantile_MUSCLE(
   n,
@@ -49,5 +49,5 @@ otherwise, quantiles will be computed via appprximation}
 Simulated quantiles.
 }
 \description{
-Simulate MUSCLE quantiles
+Simulate MUSCLE and D-MUSCLE quantiles
 }

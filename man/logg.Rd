@@ -2,8 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{logg}
 \alias{logg}
-\title{logg
-Returns log(x) for positive x and zero for x = 0.}
+\title{Returns log(x) for positive x and zero for x = 0.}
 \usage{
 logg(x)
 }
@@ -11,6 +10,5 @@ logg(x)
 \item{x}{numeric vector}
 }
 \description{
-logg
 Returns log(x) for positive x and zero for x = 0.
 }

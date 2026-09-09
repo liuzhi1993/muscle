@@ -2,7 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{teethfun}
 \alias{teethfun}
-\title{teeth function}
+\title{create 'teeth' function}
 \usage{
 teethfun(n, K, h = 3)
 }
@@ -14,5 +14,5 @@ teethfun(n, K, h = 3)
 \item{h}{higher level.}
 }
 \description{
-teeth function
+create 'teeth' function
 }

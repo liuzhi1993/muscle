@@ -2,8 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{V}
 \alias{V}
-\title{V-measure
-Compute V-measure of change points estimation.}
+\title{Compute V-measure of change points estimation.}
 \usage{
 V(left, left_hat, n)
 }
@@ -15,6 +14,5 @@ V(left, left_hat, n)
 \item{n}{sample size}
 }
 \description{
-V-measure
 Compute V-measure of change points estimation.
 }

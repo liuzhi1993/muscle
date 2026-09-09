@@ -2,8 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{evalStepFun}
 \alias{evalStepFun}
-\title{evaluate step function
-Compute segmentation result.}
+\title{Compute segmentation result.}
 \usage{
 evalStepFun(stepF)
 }
@@ -11,6 +10,5 @@ evalStepFun(stepF)
 \item{stepF}{segmentation result.}
 }
 \description{
-evaluate step function
 Compute segmentation result.
 }

@@ -1,8 +1,8 @@
 ---
-title: "muscle-vignette"
+title: "musclePST-vignette"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{muscle-vignette}
+  %\VignetteIndexEntry{musclePST-vignette}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -15,5 +15,5 @@ knitr::opts_chunk$set(
 ```
 
 ```{r setup}
-library(muscle)
+library(musclePST)
 ```

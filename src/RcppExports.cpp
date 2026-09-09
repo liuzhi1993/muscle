@@ -10,9 +10,27 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// pst_window_query
+List pst_window_query(NumericVector& Y, int start_offset, int end_offset, int n_starts, int order, int lo, int hi, int parity);
+RcppExport SEXP _musclePST_pst_window_query(SEXP YSEXP, SEXP start_offsetSEXP, SEXP end_offsetSEXP, SEXP n_startsSEXP, SEXP orderSEXP, SEXP loSEXP, SEXP hiSEXP, SEXP paritySEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector& >::type Y(YSEXP);
+    Rcpp::traits::input_parameter< int >::type start_offset(start_offsetSEXP);
+    Rcpp::traits::input_parameter< int >::type end_offset(end_offsetSEXP);
+    Rcpp::traits::input_parameter< int >::type n_starts(n_startsSEXP);
+    Rcpp::traits::input_parameter< int >::type order(orderSEXP);
+    Rcpp::traits::input_parameter< int >::type lo(loSEXP);
+    Rcpp::traits::input_parameter< int >::type hi(hiSEXP);
+    Rcpp::traits::input_parameter< int >::type parity(paritySEXP);
+    rcpp_result_gen = Rcpp::wrap(pst_window_query(Y, start_offset, end_offset, n_starts, order, lo, hi, parity));
+    return rcpp_result_gen;
+END_RCPP
+}
 // MUSCLE
 List MUSCLE(NumericVector& Y, NumericVector& q, double beta, bool test, bool details);
-RcppExport SEXP _muscle_MUSCLE(SEXP YSEXP, SEXP qSEXP, SEXP betaSEXP, SEXP testSEXP, SEXP detailsSEXP) {
+RcppExport SEXP _musclePST_MUSCLE(SEXP YSEXP, SEXP qSEXP, SEXP betaSEXP, SEXP testSEXP, SEXP detailsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -27,7 +45,7 @@ END_RCPP
 }
 // DMUSCLE
 List DMUSCLE(NumericVector& Y, NumericVector& q, double beta, int lag, bool test, bool details);
-RcppExport SEXP _muscle_DMUSCLE(SEXP YSEXP, SEXP qSEXP, SEXP betaSEXP, SEXP lagSEXP, SEXP testSEXP, SEXP detailsSEXP) {
+RcppExport SEXP _musclePST_DMUSCLE(SEXP YSEXP, SEXP qSEXP, SEXP betaSEXP, SEXP lagSEXP, SEXP testSEXP, SEXP detailsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -43,7 +61,7 @@ END_RCPP
 }
 // MMUSCLE
 List MMUSCLE(NumericVector& Y, NumericMatrix& q_matrix, NumericVector& beta_vec, bool test, bool details);
-RcppExport SEXP _muscle_MMUSCLE(SEXP YSEXP, SEXP q_matrixSEXP, SEXP beta_vecSEXP, SEXP testSEXP, SEXP detailsSEXP) {
+RcppExport SEXP _musclePST_MMUSCLE(SEXP YSEXP, SEXP q_matrixSEXP, SEXP beta_vecSEXP, SEXP testSEXP, SEXP detailsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -58,7 +76,7 @@ END_RCPP
 }
 // MUSCLE_FULL
 List MUSCLE_FULL(NumericVector& Y, NumericVector& q, double beta, bool test, bool details);
-RcppExport SEXP _muscle_MUSCLE_FULL(SEXP YSEXP, SEXP qSEXP, SEXP betaSEXP, SEXP testSEXP, SEXP detailsSEXP) {
+RcppExport SEXP _musclePST_MUSCLE_FULL(SEXP YSEXP, SEXP qSEXP, SEXP betaSEXP, SEXP testSEXP, SEXP detailsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -73,7 +91,7 @@ END_RCPP
 }
 // DMUSCLE_FULL
 List DMUSCLE_FULL(NumericVector& Y, NumericVector& q, double beta, int lag, bool test, bool details);
-RcppExport SEXP _muscle_DMUSCLE_FULL(SEXP YSEXP, SEXP qSEXP, SEXP betaSEXP, SEXP lagSEXP, SEXP testSEXP, SEXP detailsSEXP) {
+RcppExport SEXP _musclePST_DMUSCLE_FULL(SEXP YSEXP, SEXP qSEXP, SEXP betaSEXP, SEXP lagSEXP, SEXP testSEXP, SEXP detailsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -89,7 +107,7 @@ END_RCPP
 }
 // simulQuantile_MUSCLE
 NumericVector simulQuantile_MUSCLE(double p, int n, double beta);
-RcppExport SEXP _muscle_simulQuantile_MUSCLE(SEXP pSEXP, SEXP nSEXP, SEXP betaSEXP) {
+RcppExport SEXP _musclePST_simulQuantile_MUSCLE(SEXP pSEXP, SEXP nSEXP, SEXP betaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -102,7 +120,7 @@ END_RCPP
 }
 // logg
 NumericVector logg(NumericVector& x);
-RcppExport SEXP _muscle_logg(SEXP xSEXP) {
+RcppExport SEXP _musclePST_logg(SEXP xSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -113,7 +131,7 @@ END_RCPP
 }
 // simulQuantile_DMUSCLE
 NumericVector simulQuantile_DMUSCLE(NumericVector& X, NumericVector& ACF, int n);
-RcppExport SEXP _muscle_simulQuantile_DMUSCLE(SEXP XSEXP, SEXP ACFSEXP, SEXP nSEXP) {
+RcppExport SEXP _musclePST_simulQuantile_DMUSCLE(SEXP XSEXP, SEXP ACFSEXP, SEXP nSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -126,18 +144,19 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_muscle_MUSCLE", (DL_FUNC) &_muscle_MUSCLE, 5},
-    {"_muscle_DMUSCLE", (DL_FUNC) &_muscle_DMUSCLE, 6},
-    {"_muscle_MMUSCLE", (DL_FUNC) &_muscle_MMUSCLE, 5},
-    {"_muscle_MUSCLE_FULL", (DL_FUNC) &_muscle_MUSCLE_FULL, 5},
-    {"_muscle_DMUSCLE_FULL", (DL_FUNC) &_muscle_DMUSCLE_FULL, 6},
-    {"_muscle_simulQuantile_MUSCLE", (DL_FUNC) &_muscle_simulQuantile_MUSCLE, 3},
-    {"_muscle_logg", (DL_FUNC) &_muscle_logg, 1},
-    {"_muscle_simulQuantile_DMUSCLE", (DL_FUNC) &_muscle_simulQuantile_DMUSCLE, 3},
+    {"_musclePST_pst_window_query", (DL_FUNC) &_musclePST_pst_window_query, 8},
+    {"_musclePST_MUSCLE", (DL_FUNC) &_musclePST_MUSCLE, 5},
+    {"_musclePST_DMUSCLE", (DL_FUNC) &_musclePST_DMUSCLE, 6},
+    {"_musclePST_MMUSCLE", (DL_FUNC) &_musclePST_MMUSCLE, 5},
+    {"_musclePST_MUSCLE_FULL", (DL_FUNC) &_musclePST_MUSCLE_FULL, 5},
+    {"_musclePST_DMUSCLE_FULL", (DL_FUNC) &_musclePST_DMUSCLE_FULL, 6},
+    {"_musclePST_simulQuantile_MUSCLE", (DL_FUNC) &_musclePST_simulQuantile_MUSCLE, 3},
+    {"_musclePST_logg", (DL_FUNC) &_musclePST_logg, 1},
+    {"_musclePST_simulQuantile_DMUSCLE", (DL_FUNC) &_musclePST_simulQuantile_DMUSCLE, 3},
     {NULL, NULL, 0}
 };
 
-RcppExport void R_init_muscle(DllInfo *dll) {
+RcppExport void R_init_musclePST(DllInfo *dll) {
     R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
     R_useDynamicSymbols(dll, FALSE);
 }

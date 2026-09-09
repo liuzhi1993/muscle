@@ -2,8 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{Local_errors}
 \alias{Local_errors}
-\title{Localization errors
-Compute localization errors of estimated change points.}
+\title{Compute localization errors of estimated change points.}
 \usage{
 Local_errors(left, left_hat, n)
 }
@@ -15,6 +14,5 @@ Local_errors(left, left_hat, n)
 \item{n}{sample size.}
 }
 \description{
-Localization errors
 Compute localization errors of estimated change points.
 }

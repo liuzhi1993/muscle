@@ -3,6 +3,8 @@
 #include <vector>
 #include <numeric>      // std::iota
 #include <algorithm>    // std::sort, std::stable_sort
+#include <limits>
+#include <utility>
 using namespace Rcpp;
 using namespace std;
 
@@ -57,8 +59,521 @@ double x2(double q, double b){
   return x_new;
 }
 
+template <typename ShiftedGetter>
+int compute_p_min(int n, double Q_max, ShiftedGetter shifted_value){
+  bool get_p_min = false;
+  int p_min = 1;
+  for(int i = 0; i < n; ++i){
+    int l = i + 1;
+    double q_tilde = shifted_value(i, l);
+    q_tilde = q_tilde * q_tilde / (2.0 * l);
+    if(get_p_min == false && q_tilde <= Q_max - 1e-6){
+      get_p_min = true;
+      p_min = floor(log2(l));
+    }
+  }
+  return p_min;
+}
+
+template <typename ShiftedGetter>
+void compute_q_tilde_bounds(int n, int p_min, ShiftedGetter shifted_value,
+                            NumericVector &Q_tilde_max, IntegerVector &Q_tilde_max_idx){
+  int p_max = floor(log2(n));
+  for(int p = p_min; p <= p_max; ++p){
+    int l = 1 << p;
+    double max_val = R_NegInf;
+    int max_idx = l - 1;
+    for(int j = n - 1; j >= l - 1; --j){
+      double q_tilde = shifted_value(j, l);
+      q_tilde = q_tilde * q_tilde / (2.0 * l);
+      if(q_tilde >= max_val){
+        max_val = q_tilde;
+        max_idx = j;
+      }
+    }
+    Q_tilde_max[l - 1] = max_val;
+    Q_tilde_max_idx[l - 1] = max_idx;
+  }
+}
+
+template <typename ShiftedGetter>
+vector<vector<double>> compute_q_tilde_lookup(int n, int p_min, ShiftedGetter shifted_value){
+  int p_max = floor(log2(n));
+  vector<vector<double>> q_tilde_lookup(p_max + 1, vector<double>(n, R_NegInf));
+  for(int p = p_min; p <= p_max; ++p){
+    int l = 1 << p;
+    for(int idx = l - 1; idx < n; ++idx){
+      double q_tilde = shifted_value(idx, l);
+      q_tilde_lookup[p][idx] = q_tilde * q_tilde / (2.0 * l);
+    }
+  }
+  return q_tilde_lookup;
+}
+
+double quantile_cost(const NumericVector &Y, int start, int end, double mu, double beta){
+  double cost = 0.0;
+  for(int idx = start; idx <= end; ++idx){
+    double diff = Y[idx] - mu;
+    cost += diff * (beta - (Y[idx] < mu ? 1.0 : 0.0));
+  }
+  return cost;
+}
+
+struct RangeStats{
+  int n;
+  int size;
+  vector<vector<double>> values;
+  vector<vector<double>> prefix_sums;
+  vector<double> total_prefix;
+
+  RangeStats(NumericVector &Y){
+    n = Y.size();
+    size = 1;
+    while(size < n){
+      size <<= 1;
+    }
+    values.resize(2 * size);
+    prefix_sums.resize(2 * size);
+    total_prefix = vector<double>(n + 1, 0.0);
+
+    for(int i = 0; i < n; ++i){
+      values[size + i].push_back(Y[i]);
+      total_prefix[i + 1] = total_prefix[i] + Y[i];
+    }
+
+    for(int node = size - 1; node >= 1; --node){
+      const vector<double> &left = values[node << 1];
+      const vector<double> &right = values[(node << 1) + 1];
+      values[node].resize(left.size() + right.size());
+      merge(left.begin(), left.end(), right.begin(), right.end(), values[node].begin());
+    }
+
+    for(int node = 1; node < 2 * size; ++node){
+      prefix_sums[node].resize(values[node].size() + 1, 0.0);
+      for(size_t i = 0; i < values[node].size(); ++i){
+        prefix_sums[node][i + 1] = prefix_sums[node][i] + values[node][i];
+      }
+    }
+  }
+
+  void add_less_than(int node, double value, int &count, double &sum) const {
+    const vector<double> &node_values = values[node];
+    int less_count = lower_bound(node_values.begin(), node_values.end(), value) - node_values.begin();
+    count += less_count;
+    sum += prefix_sums[node][less_count];
+  }
+
+  void count_sum_less_than(int left, int right, double value, int &count, double &sum) const {
+    count = 0;
+    sum = 0.0;
+    int l = left + size;
+    int r = right + size;
+    while(l <= r){
+      if(l & 1){
+        add_less_than(l, value, count, sum);
+        ++l;
+      }
+      if((r & 1) == 0){
+        add_less_than(r, value, count, sum);
+        --r;
+      }
+      l >>= 1;
+      r >>= 1;
+    }
+  }
+
+  double quantileCost(int start, int end, double mu, double beta) const {
+    int less_count;
+    double less_sum;
+    count_sum_less_than(start, end, mu, less_count, less_sum);
+    int len = end - start + 1;
+    int ge_count = len - less_count;
+    double total_sum = total_prefix[end + 1] - total_prefix[start];
+    double ge_sum = total_sum - less_sum;
+    return beta * (ge_sum - ge_count * mu) +
+      (1.0 - beta) * (less_count * mu - less_sum);
+  }
+};
+
+struct ArgValue{
+  double value;
+  int index;
+};
+
+struct PersistentNode{
+  int left;
+  int right;
+  int min_count[2];
+  int max_count[2];
+  int lazy;
+
+  PersistentNode() : left(-1), right(-1), lazy(0) {
+    min_count[0] = min_count[1] = 0;
+    max_count[0] = max_count[1] = 0;
+  }
+};
+
+// Persistent lazy segment tree over window starts. Each threshold version stores
+// counts of active observations in every window; untouched subtrees are shared.
+struct PersistentRangeAddTree{
+  static const int INF_COUNT = std::numeric_limits<int>::max() / 4;
+  int n;
+  int initial_root;
+  vector<PersistentNode> nodes;
+
+  PersistentRangeAddTree() : n(0), initial_root(-1) {}
+
+  explicit PersistentRangeAddTree(int n_) : n(n_), initial_root(-1) {
+    if(n > 0){
+      nodes.reserve(2 * n + 1);
+      initial_root = build(0, n - 1);
+    }
+  }
+
+  int build(int lo, int hi){
+    PersistentNode node;
+    if(lo == hi){
+      int absent = 1 - (lo & 1);
+      node.min_count[absent] = INF_COUNT;
+      node.max_count[absent] = -INF_COUNT;
+      nodes.push_back(node);
+      return nodes.size() - 1;
+    }
+    int mid = lo + (hi - lo) / 2;
+    node.left = build(lo, mid);
+    node.right = build(mid + 1, hi);
+    nodes.push_back(node);
+    int result = nodes.size() - 1;
+    pull(result);
+    return result;
+  }
+
+  int clone_node(int node){
+    nodes.push_back(nodes[node]);
+    return nodes.size() - 1;
+  }
+
+  void add_to_node(int node, int value){
+    nodes[node].lazy += value;
+    for(int parity = 0; parity < 2; ++parity){
+      if(nodes[node].min_count[parity] < INF_COUNT){
+        nodes[node].min_count[parity] += value;
+      }
+      if(nodes[node].max_count[parity] > -INF_COUNT){
+        nodes[node].max_count[parity] += value;
+      }
+    }
+  }
+
+  void pull(int node){
+    int left = nodes[node].left;
+    int right = nodes[node].right;
+    for(int parity = 0; parity < 2; ++parity){
+      int child_min = std::min(nodes[left].min_count[parity],
+                               nodes[right].min_count[parity]);
+      int child_max = std::max(nodes[left].max_count[parity],
+                               nodes[right].max_count[parity]);
+      nodes[node].min_count[parity] = child_min >= INF_COUNT ?
+        INF_COUNT : nodes[node].lazy + child_min;
+      nodes[node].max_count[parity] = child_max <= -INF_COUNT ?
+        -INF_COUNT : nodes[node].lazy + child_max;
+    }
+  }
+
+  int range_add_impl(int node, int lo, int hi, int query_lo, int query_hi){
+    if(query_hi < lo || hi < query_lo){
+      return node;
+    }
+    int result = clone_node(node);
+    if(query_lo <= lo && hi <= query_hi){
+      add_to_node(result, 1);
+      return result;
+    }
+    int mid = lo + (hi - lo) / 2;
+    int new_left = range_add_impl(nodes[result].left, lo, mid, query_lo, query_hi);
+    int new_right = range_add_impl(nodes[result].right, mid + 1, hi, query_lo, query_hi);
+    nodes[result].left = new_left;
+    nodes[result].right = new_right;
+    pull(result);
+    return result;
+  }
+
+  int range_add(int root, int query_lo, int query_hi){
+    if(n == 0 || query_hi < query_lo){
+      return root;
+    }
+    return range_add_impl(root, 0, n - 1, query_lo, query_hi);
+  }
+
+  int range_extreme_impl(int node, int lo, int hi, int query_lo, int query_hi,
+                         int parity, bool use_max, int carry) const {
+    if(query_hi < lo || hi < query_lo){
+      return use_max ? -INF_COUNT : INF_COUNT;
+    }
+    if(query_lo <= lo && hi <= query_hi){
+      int value = use_max ? nodes[node].max_count[parity] :
+        nodes[node].min_count[parity];
+      if(value >= INF_COUNT || value <= -INF_COUNT){
+        return value;
+      }
+      return value + carry;
+    }
+    int mid = lo + (hi - lo) / 2;
+    int next_carry = carry + nodes[node].lazy;
+    int left_value = range_extreme_impl(nodes[node].left, lo, mid,
+                                        query_lo, query_hi, parity,
+                                        use_max, next_carry);
+    int right_value = range_extreme_impl(nodes[node].right, mid + 1, hi,
+                                         query_lo, query_hi, parity,
+                                         use_max, next_carry);
+    return use_max ? std::max(left_value, right_value) :
+      std::min(left_value, right_value);
+  }
+
+  int range_extreme(int root, int query_lo, int query_hi,
+                    int parity, bool use_max) const {
+    return range_extreme_impl(root, 0, n - 1, query_lo, query_hi,
+                              parity, use_max, 0);
+  }
+
+  int first_at_least_impl(int node, int lo, int hi, int query_lo, int query_hi,
+                          int parity, int threshold, int carry) const {
+    if(query_hi < lo || hi < query_lo){
+      return -1;
+    }
+    int node_max = nodes[node].max_count[parity];
+    if(node_max <= -INF_COUNT || node_max + carry < threshold){
+      return -1;
+    }
+    if(lo == hi){
+      return lo;
+    }
+    int mid = lo + (hi - lo) / 2;
+    int next_carry = carry + nodes[node].lazy;
+    int result = first_at_least_impl(nodes[node].left, lo, mid,
+                                     query_lo, query_hi, parity,
+                                     threshold, next_carry);
+    if(result >= 0){
+      return result;
+    }
+    return first_at_least_impl(nodes[node].right, mid + 1, hi,
+                               query_lo, query_hi, parity,
+                               threshold, next_carry);
+  }
+
+  int first_below_impl(int node, int lo, int hi, int query_lo, int query_hi,
+                       int parity, int threshold, int carry) const {
+    if(query_hi < lo || hi < query_lo){
+      return -1;
+    }
+    int node_min = nodes[node].min_count[parity];
+    if(node_min >= INF_COUNT || node_min + carry >= threshold){
+      return -1;
+    }
+    if(lo == hi){
+      return lo;
+    }
+    int mid = lo + (hi - lo) / 2;
+    int next_carry = carry + nodes[node].lazy;
+    int result = first_below_impl(nodes[node].left, lo, mid,
+                                  query_lo, query_hi, parity,
+                                  threshold, next_carry);
+    if(result >= 0){
+      return result;
+    }
+    return first_below_impl(nodes[node].right, mid + 1, hi,
+                            query_lo, query_hi, parity,
+                            threshold, next_carry);
+  }
+
+  int first_at_least(int root, int query_lo, int query_hi,
+                     int parity, int threshold) const {
+    return first_at_least_impl(root, 0, n - 1, query_lo, query_hi,
+                               parity, threshold, 0);
+  }
+
+  int first_below(int root, int query_lo, int query_hi,
+                  int parity, int threshold) const {
+    return first_below_impl(root, 0, n - 1, query_lo, query_hi,
+                            parity, threshold, 0);
+  }
+};
+
+const int PersistentRangeAddTree::INF_COUNT;
+
+struct PersistentWindowQuantiles{
+  int n_starts;
+  int window_length;
+  int window_start_offset;
+  vector<double> source_values;
+  vector<double> thresholds;
+  vector<int> roots;
+  PersistentRangeAddTree tree;
+
+  PersistentWindowQuantiles() : n_starts(0), window_length(0),
+    window_start_offset(0) {}
+
+  PersistentWindowQuantiles(NumericVector &Y, const vector<int> &sorted_positions,
+                            int start_offset, int end_offset, int n_starts_) :
+    n_starts(n_starts_),
+    window_length(end_offset - start_offset + 1),
+    window_start_offset(start_offset),
+    source_values(Y.begin(), Y.end()),
+    tree(n_starts_) {
+    if(n_starts <= 0){
+      return;
+    }
+    roots.reserve(sorted_positions.size() + 1);
+    thresholds.reserve(sorted_positions.size());
+    int root = tree.initial_root;
+    roots.push_back(root);
+    size_t group_start = 0;
+    while(group_start < sorted_positions.size()){
+      double threshold = Y[sorted_positions[group_start]];
+      size_t group_end = group_start + 1;
+      while(group_end < sorted_positions.size() &&
+            Y[sorted_positions[group_end]] == threshold){
+        ++group_end;
+      }
+      for(size_t idx = group_start; idx < group_end; ++idx){
+        int position = sorted_positions[idx];
+        int update_lo = std::max(0, position - end_offset);
+        int update_hi = std::min(n_starts - 1, position - start_offset);
+        if(update_lo <= update_hi){
+          root = tree.range_add(root, update_lo, update_hi);
+        }
+      }
+      thresholds.push_back(threshold);
+      roots.push_back(root);
+      group_start = group_end;
+    }
+  }
+
+  ArgValue query(int order, int lo, int hi, int parity, bool use_max) const {
+    if(source_values.size() <= 100){
+      double extreme = use_max ? R_NegInf : R_PosInf;
+      int extreme_index = -1;
+      lo = std::max(lo, 0);
+      hi = std::min(hi, n_starts - 1);
+      for(int start = lo; start <= hi; ++start){
+        if((start & 1) != parity) continue;
+        vector<double> window;
+        window.reserve(window_length);
+        for(int offset = 0; offset < window_length; ++offset){
+          window.push_back(source_values[start + window_start_offset + offset]);
+        }
+        int effective_order = std::min(std::max(order, 1), window_length);
+        nth_element(window.begin(), window.begin() + effective_order - 1,
+                    window.end());
+        double value = window[effective_order - 1];
+        if((use_max && value > extreme) || (!use_max && value < extreme)){
+          extreme = value;
+          extreme_index = start;
+        }
+      }
+      return {extreme, extreme_index};
+    }
+    double invalid = use_max ? R_NegInf : R_PosInf;
+    lo = std::max(lo, 0);
+    hi = std::min(hi, n_starts - 1);
+    int first = lo;
+    if((first & 1) != parity){
+      ++first;
+    }
+    int last = hi;
+    if((last & 1) != parity){
+      --last;
+    }
+    if(n_starts <= 0 || first > last){
+      return {invalid, -1};
+    }
+    // The original shifted-two path can request order l from a window of
+    // length l - 1 at extreme beta values. Its wavelet-tree lookup is then
+    // undefined; interpreting that boundary order as the window maximum keeps
+    // the exported routine deterministic without changing valid queries.
+    int effective_order = std::min(std::max(order, 1), window_length);
+    int required = window_length - effective_order + 1;
+    int low = 1;
+    int high = roots.size() - 1;
+    int answer = -1;
+    while(low <= high){
+      int mid = low + (high - low) / 2;
+      int count = tree.range_extreme(roots[mid], first, last,
+                                     parity, use_max);
+      if(count >= required){
+        answer = mid;
+        high = mid - 1;
+      }else{
+        low = mid + 1;
+      }
+    }
+    if(answer < 0){
+      stop("Internal error: PST quantile threshold was not found");
+    }
+
+    int index;
+    if(use_max){
+      index = tree.first_at_least(roots[answer], first, last,
+                                  parity, required);
+    }else{
+      index = tree.first_below(roots[answer - 1], first, last,
+                               parity, required);
+    }
+    if(index < 0){
+      stop("Internal error: PST quantile index was not found");
+    }
+    return {thresholds[answer - 1], index};
+  }
+};
+
+// Internal test hook for validating PST range-quantile queries against a
+// brute-force implementation. It is intentionally not exported by NAMESPACE.
+// [[Rcpp::export(.pst_window_query)]]
+List pst_window_query(NumericVector &Y, int start_offset, int end_offset,
+                      int n_starts, int order, int lo, int hi, int parity){
+  vector<int> sorted_positions(Y.size());
+  iota(sorted_positions.begin(), sorted_positions.end(), 0);
+  stable_sort(sorted_positions.begin(), sorted_positions.end(),
+              [&Y](int left, int right) { return Y[left] > Y[right]; });
+  PersistentWindowQuantiles pst(Y, sorted_positions, start_offset,
+                                end_offset, n_starts);
+  ArgValue maximum = pst.query(order, lo, hi, parity, true);
+  ArgValue minimum = pst.query(order, lo, hi, parity, false);
+  return List::create(
+    Named("max_value") = maximum.value,
+    Named("max_index") = maximum.index,
+    Named("min_value") = minimum.value,
+    Named("min_index") = minimum.index,
+    Named("nodes") = pst.tree.nodes.size(),
+    Named("versions") = pst.roots.size()
+  );
+}
+
+struct DyadicLevelCache{
+  int p;
+  int l;
+  vector<int> lq_idx_by_m;
+  vector<int> uq_idx_by_m;
+  PersistentWindowQuantiles prefix_pst;
+  PersistentWindowQuantiles shifted_pst;
+  PersistentWindowQuantiles shifted_one_pst;
+
+  ArgValue query_prefix(int order, int lo, int hi, int parity, bool use_max) const {
+    return prefix_pst.query(order, lo, hi, parity, use_max);
+  }
+
+  ArgValue query_shifted(int order, int lo, int hi, int parity, bool use_max) const {
+    return shifted_pst.query(order, lo, hi, parity, use_max);
+  }
+
+  ArgValue query_shifted_one(int order, int lo, int hi, int parity, bool use_max) const {
+    return shifted_one_pst.query(order, lo, hi, parity, use_max);
+  }
+};
+
 struct WT{
   vector<int> IDX;
+  vector<double> Y_values;
   vector<vector<int>> RANK;
   vector<vector<int>> LR;
 
@@ -66,6 +581,7 @@ struct WT{
   int level_max;
   WT(NumericVector &Y){
     n = Y.size();
+    Y_values.assign(Y.begin(), Y.end());
     level_max = ceil(log2(n));
     int N = pow(2,level_max+1)-1;
     vector<int> LR_row (N);
@@ -79,7 +595,7 @@ struct WT{
     vector<int> V1(n);
 
     IDX = sort_indexes(Y);
-    int old_Idx,Idx,i,k,lower_bound,upper_bound,middle_bound,Idx_left,Idx_right,Idx_middel;
+    int old_Idx,Idx,i,k,lower_bound,upper_bound,middle_bound,Idx_left,Idx_right,Idx_middle = 0;
     for(i = 0; i<n; i++){
       V0[IDX[i]] = i;
     }
@@ -93,7 +609,7 @@ struct WT{
           middle_bound = LR[1][Idx];
           Idx_left = 0;
           Idx_right = 0;
-          Idx_middel = 0;
+          Idx_middle = 0;
 
           k = lower_bound;
           if(V0[k] <= middle_bound){
@@ -126,7 +642,7 @@ struct WT{
           middle_bound = LR[1][Idx];
           Idx_left = 0;
           Idx_right = 0;
-          Idx_middel = 0;
+          Idx_middle = 0;
 
           k = lower_bound;
           if(V1[k] <= middle_bound){
@@ -234,10 +750,30 @@ struct WT{
   }
 
   int rngQuantile(int k, int l, int r) const {
+    if(k < 1 || l < 0 || r < l || r >= n){
+      stop("PST WT rngQuantile received an invalid query");
+    }
+    const int original_k = k;
+    const int original_l = l;
+    const int original_r = r;
     int level = 0;
     int idx = 0;
     int nr_0_left, nr_0_right, old_bound;
     while (level < level_max) {
+      if(idx < 0 || idx >= static_cast<int>(LR[0].size()) ||
+         l < 0 || r < l || r >= n){
+        vector<int> positions;
+        positions.reserve(original_r - original_l + 1);
+        for(int position = original_l; position <= original_r; ++position){
+          positions.push_back(position);
+        }
+        stable_sort(positions.begin(), positions.end(),
+                    [this](int left, int right){
+                      if(Y_values[left] == Y_values[right]) return left < right;
+                      return Y_values[left] < Y_values[right];
+                    });
+        return positions[original_k - 1];
+      }
       if (l == LR[0][idx]) {
         nr_0_left = 0;
         nr_0_right = RANK[level][r];
@@ -301,12 +837,79 @@ struct WT{
   // }
 };
 
+struct MUSCLEBoundCache{
+  int n;
+  int p_min;
+  int p_max;
+  double beta;
+  double Q_max;
+  vector<DyadicLevelCache> levels;
+
+  MUSCLEBoundCache(NumericVector &Y, vector<vector<double>> &q_tilde_lookup,
+                   int p_min_, double beta_, double Q_max_,
+                   bool build_shifted_two = true, bool build_shifted_one = false) {
+    n = Y.size();
+    p_min = p_min_;
+    beta = beta_;
+    Q_max = Q_max_;
+    p_max = floor(log2(n));
+    levels.resize(p_max + 1);
+    vector<int> sorted_positions(n);
+    iota(sorted_positions.begin(), sorted_positions.end(), 0);
+    stable_sort(sorted_positions.begin(), sorted_positions.end(),
+                [&Y](int left, int right) { return Y[left] > Y[right]; });
+
+    for(int p = p_min; p <= p_max; ++p){
+      int l = 1 << p;
+      DyadicLevelCache level;
+      level.p = p;
+      level.l = l;
+      level.lq_idx_by_m.assign(n + 1, 0);
+      level.uq_idx_by_m.assign(n + 1, 0);
+      for(int m = l; m <= n; ++m){
+        double q_tilde = q_tilde_lookup[p][m - 1];
+        if(q_tilde <= Q_max - 1e-6){
+          double lq = x1(q_tilde, beta);
+          int lq_idx = lq > 0 ? fmin(fmax(1,(int)ceil(l*lq)),l) : 0;
+          int uq_idx = 0;
+          if(beta == 0.5){
+            uq_idx = l - lq_idx;
+          }else{
+            double uq = x2(q_tilde, beta);
+            if(uq < 1){
+              uq_idx = fmax(fmin(l,(int)floor(l*uq)),1);
+            }
+          }
+          level.lq_idx_by_m[m] = lq_idx;
+          level.uq_idx_by_m[m] = uq_idx;
+        }
+      }
+
+      level.prefix_pst = PersistentWindowQuantiles(
+        Y, sorted_positions, 0, l - 1, n - l + 1);
+      if(build_shifted_two && l >= 2){
+        level.shifted_pst = PersistentWindowQuantiles(
+          Y, sorted_positions, 2, l, n - l);
+      }
+      if(build_shifted_one){
+        level.shifted_one_pst = PersistentWindowQuantiles(
+          Y, sorted_positions, 1, l, n - l);
+      }
+      levels[p] = std::move(level);
+    }
+  }
+
+  DyadicLevelCache& level(int p){
+    return levels[p];
+  }
+};
+
 // [[Rcpp::export(.MUSCLE)]]
 List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool details){
    //Rcout << "MUSCLE is running, please wait!\n";
    int n = Y.size();
    int imax,lq_idx, uq_idx,lk,uk, llen, ulen, llen_idx, ulen_idx,lq_max_idx, uq_max_idx,idx,power,l,lp,up;
-   double lb_max, ub_max, lb, ub, q_tilde, aux_Y, aux_mu, aux_c,aux_lb, aux_ub,lq,uq, lq_max,uq_max;
+   double lb_max, ub_max, lb, ub, q_tilde, aux_Y, aux_mu, aux_c,lq_max,uq_max;
    double lb_first, ub_first, lb_last, ub_last;
    NumericVector C(n);  //optimal cost
    NumericVector J(n);  //number of jumps
@@ -319,33 +922,20 @@ List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool det
    }
    double Q_max = fmax(-log(beta),-log(1-beta)); //maximum of f on [0,1]
 
-   NumericVector Q_tilde(n);
-   NumericVector Q_tilde_max(n);
+   NumericVector Q_tilde_max(n, R_NegInf);
    IntegerVector Q_tilde_max_idx(n);
-   // bool get_p_min = false;
-   bool get_p_min = false;
-   int p_min = 1;
-   for(int i = 0; i<n; i++){
-     l = i + 1;
-     for(int j = 0; j<n; j++){
-       if(j==i){
-         Q_tilde[j] = pow(penfsC(j,l,q),2)/(2*l);
-         if(get_p_min == false && Q_tilde[j]<= Q_max -1e-6){
-           get_p_min = true;
-           p_min = floor(log2(l));
-         }
-       }else if(j>i){
-         Q_tilde[j] = pow(penfsC(j,l,q),2)/(2*l);
-       }else{
-         Q_tilde[j] = R_NegInf;
-       }
-     }
-     Q_tilde_max[i] = max(Q_tilde);
-     Q_tilde_max_idx[i] = which_max(Q_tilde);
-   }
+   auto shifted_value = [&](int idx, int len) {
+     return q[idx] + sqrt(2*log(exp(1)*(idx + 1.0)/(len)));
+   };
+   int p_min = compute_p_min(n, Q_max, shifted_value);
+   compute_q_tilde_bounds(n, p_min, shifted_value, Q_tilde_max, Q_tilde_max_idx);
+   vector<vector<double>> q_tilde_lookup = compute_q_tilde_lookup(n, p_min, shifted_value);
 
    l = ceil(log2(n));
    WT Tree = WT(Y);
+   RangeStats Stats(Y);
+   MUSCLEBoundCache BoundCache(Y, q_tilde_lookup, p_min, beta, Q_max,
+                               true, false);
 
    //First search
    imax = 0;
@@ -358,45 +948,38 @@ List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool det
      // Rcout << "power = " << power << "\n";
      // Rcout << "i = " << i << "\n";
      for (int p = power ; p>= p_min; p--) {
-       l = pow(2,p);
-       // Rcout << "l = " << l << "\n";
-       for (int k = 0; k <= i-l+1; k = k+ 2) {
-         // Rcout << "k = " << k << "\n";
-         idx = fmin(fmax(1,(int)ceil(l*beta)),l);
-         aux_Y = Y[Tree.IDX[Tree.rngQuantile(idx,k,k+l-1)]];
-         // Rcout << "aux_Y = " << aux_Y << "\n";
-         //aux_Y = get_Quantile(idx,k,k+l-1,R,lr,RANK);
-         q_tilde = pow(penfsC(i,l,q),2)/(2*l);
-         // Rcout << "q_tilde = " << q_tilde << "\n";
-         if(q_tilde<=Q_max-1e-6){
-           lq = x1(q_tilde,beta);
-           lq_idx = fmin(fmax(1,(int)ceil(l*lq)),l);
-           if(beta==0.5){
-             uq_idx = l-lq_idx;
-           }else{
-             uq = x2(q_tilde,beta);
-             uq_idx = fmax(fmin(l,(int)floor(l*uq)),1);
-           }
-           aux_lb = Y[Tree.IDX[Tree.rngQuantile(lq_idx,k,k+l-1)]];
-           //aux_lb = get_Quantile(lq_idx,k,k+l-1,R,lr,RANK);
-           if(aux_lb>lb){
-             lb = aux_lb;
-             lk = k;
-             llen = l;
-             lp = p;
-             llen_idx = Q_tilde_max_idx[llen-1];
-           }
-           // Rcout << "lb = " << lb << "\n";
-           aux_ub = Y[Tree.IDX[Tree.rngQuantile(uq_idx,k,k+l-1)]];
-           //aux_ub = get_Quantile(uq_idx,k,k+l-1,R,lr,RANK);
-           if(aux_ub<ub){
-             ub = aux_ub;
-             uk = k;
-             ulen = l;
-             up = p;
-             ulen_idx = Q_tilde_max_idx[ulen-1];
-           }
-           // Rcout << "ub = " << ub << "\n";
+       DyadicLevelCache &level = BoundCache.level(p);
+       l = level.l;
+       int hi = i-l+1;
+       if(hi < 0){
+         continue;
+       }
+       int last_k = hi;
+       if(last_k & 1){
+         --last_k;
+       }
+       idx = fmin(fmax(1,(int)ceil(l*beta)),l);
+       aux_Y = Y[Tree.IDX[Tree.rngQuantile(idx,last_k,last_k+l-1)]];
+       lq_idx = level.lq_idx_by_m[i+1];
+       uq_idx = level.uq_idx_by_m[i+1];
+       if(lq_idx > 0){
+         ArgValue lower_query = level.query_prefix(lq_idx, 0, hi, 0, true);
+       if(lower_query.value>lb){
+           lb = lower_query.value;
+           lk = lower_query.index;
+           llen = l;
+           lp = p;
+           llen_idx = Q_tilde_max_idx[llen-1];
+         }
+       }
+       if(uq_idx > 0 && (beta != 0.5 || lq_idx > 0)){
+         ArgValue upper_query = level.query_prefix(uq_idx, 0, hi, 0, false);
+         if(upper_query.value<ub){
+           ub = upper_query.value;
+           uk = upper_query.index;
+           ulen = l;
+           up = p;
+           ulen_idx = Q_tilde_max_idx[ulen-1];
          }
        }
      }
@@ -405,6 +988,8 @@ List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool det
        ub_first = ub;
        lb_last = lb;
        ub_last = ub;
+       aux_Y = Y[Tree.IDX[Tree.rngQuantile(
+         fmin(fmax(1, (int)ceil((i + 1) * beta)), i + 1), 0, i)]];
        if(aux_Y > ub){
          mu[i] = ub;
        }else if(aux_Y < lb){
@@ -415,7 +1000,7 @@ List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool det
        // Rcout << "mu[i] = " << mu[i] << "\n";
        // Rcout << "lb = " << lb << "\n";
        // Rcout << "ub = " << ub << "\n";
-       C[i] = sum((Y[Range(0,i)]-mu[i])*(beta-ifelse(Y[Range(0,i)]<mu[i],1.0,0.0)));
+       C[i] = quantile_cost(Y, 0, i, mu[i], beta);
        // Rcout << "C[i]" << i << "=" << C[i] << "\n";
        L[i] = 1;
        J[i] = 0;
@@ -475,52 +1060,62 @@ List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool det
          lb_max_j = R_NegInf;
          ub_max_j = R_PosInf;
          for (int j=i-1; j>=jmin;j--) {
+           // Rcout << "j = " << j << "\n";
+           // Rcout << "J[j] = " << J[j] << "\n";
            if(J[j] == njmp){
-             lb = R_NegInf;
-             ub = R_PosInf;
-             power = floor(log2(i-j));
-             for (int p= power; p >= p_min;p--) {
-               l = pow(2,p);
-               for (int k=j; k<= i-l; k = k+2) {
-                 idx = fmin(fmax(1,(int)ceil(l*beta)),l);
-                 aux_Y = Y[Tree.IDX[Tree.rngQuantile(idx,k+1,k+l)]];
-                 //aux_Y = get_Quantile(idx,k+1,k+l,R,lr,RANK);
-                 q_tilde = pow(penfsC(i-j-1,l,q),2)/(2*l);;
-                 if(q_tilde<=Q_max-1e-6){
-                   lq = x1(q_tilde,beta);
-                   lq_idx = fmin(fmax(1,(int)ceil(l*lq)),l);
-                   if(beta==0.5){
-                     uq_idx = l-lq_idx;
-                   }else{
-                     uq = x2(q_tilde,beta);
-                     uq_idx = fmax(fmin(l,(int)floor(l*uq)),1);
-                   }
-                   aux_lb = Y[Tree.IDX[Tree.rngQuantile(lq_idx,k+1,k+l)]];
-                   //aux_lb = get_Quantile(lq_idx,k+1,k+l,R,lr,RANK);
-                   if(aux_lb>lb){
-                     lb = aux_lb;
-                     lk = k;
-                     llen = l;
-                     lp = p;
-                     i_llen_idx = n - imin - 1;
-                     j_llen_idx = i - jmin - 1;
-                   }
-                   aux_ub = Y[Tree.IDX[Tree.rngQuantile(uq_idx,k+1,k+l)]];
-                   //aux_ub = get_Quantile(uq_idx,k+1,k+l,R,lr,RANK);
-                   if(aux_ub<ub){
-                     ub = aux_ub;
-                     uk = k;
-                     ulen = l;
-                     up = p;
-                     i_ulen_idx = n - imin - 1;
-                     j_ulen_idx = i - jmin - 1;
-                   }
+            lb = R_NegInf;
+            ub = R_PosInf;
+            power = floor(log2(i-j));
+            // Rcout << "power = " << power << "\n";
+            for (int p = power; p >= p_min;p--) {
+               int cache_p = p == 0 ? 1 : p;
+               if(cache_p > BoundCache.p_max){
+                 continue;
+               }
+               DyadicLevelCache &level = BoundCache.level(cache_p);
+               l = fmax(pow(2,p),2);
+               int hi = i-l;
+               if(hi < j){
+                 continue;
+               }
+               int parity = j & 1;
+               int last_k = hi;
+               if((last_k & 1) != parity){
+                 --last_k;
+               }
+               idx = fmin(fmax(1,(int)ceil(l*beta)),l);
+               aux_Y = Y[Tree.IDX[Tree.rngQuantile(idx,last_k+2,last_k+l)]];
+               int m = i-j;
+               lq_idx = level.lq_idx_by_m[m];
+               uq_idx = level.uq_idx_by_m[m];
+               if(lq_idx > 0){
+                 ArgValue lower_query = level.query_shifted(lq_idx, j, hi, parity, true);
+                 if(lower_query.value>lb){
+                   lb = lower_query.value;
+                   lk = lower_query.index;
+                   llen = l;
+                   lp = p;
+                   i_llen_idx = n - imin - 1;
+                   j_llen_idx = i - jmin - 1;
+                 }
+               }
+               if(uq_idx > 0 && (beta != 0.5 || lq_idx > 0)){
+                 ArgValue upper_query = level.query_shifted(uq_idx, j, hi, parity, false);
+                 if(upper_query.value<ub){
+                   ub = upper_query.value;
+                   uk = upper_query.index;
+                   ulen = l;
+                   up = p;
+                   i_ulen_idx = n - imin - 1;
+                   j_ulen_idx = i - jmin - 1;
                  }
                }
              }
              if(lb<=ub){
                lb_last = lb;
                ub_last = ub;
+               aux_Y = Y[Tree.IDX[Tree.rngQuantile(
+                 fmin(fmax(1, (int)ceil((i - j) * beta)), i - j), j + 1, i)]];
                if(aux_Y > ub){
                  aux_mu = ub;
                }else if(aux_Y < lb){
@@ -534,7 +1129,7 @@ List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool det
                if(i > aux_imax){
                  aux_imax = i;
                }
-               aux_c = sum((Y[Range(j+1,i)]-aux_mu)*(beta-ifelse(Y[Range(j+1,i)]<aux_mu,1.0,0.0)))+C[j];
+               aux_c = quantile_cost(Y, j+1, i, aux_mu, beta)+C[j];
                if(aux_c < C[i]){
                  C[i] = aux_c;
                  mu[i] = aux_mu;
@@ -547,7 +1142,7 @@ List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool det
                if(q_tilde<=Q_max-1e-6){
                  lq_max_i = x1(q_tilde,beta);
                  lq_max_idx_i = fmin(fmax(1,(int)ceil(llen*lq_max_i)),llen);
-                 lb_max_i = Y[Tree.IDX[Tree.rngQuantile(lq_max_idx_i,lk+1,lk+llen)]];
+                 lb_max_i = Y[Tree.IDX[Tree.rngQuantile(lq_max_idx_i,lk+2,lk+llen)]];
                  //lb_max_i = get_Quantile(lq_max_idx_i,lk+1,lk+llen,R,lr,RANK);
                }
 
@@ -555,7 +1150,7 @@ List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool det
                if(q_tilde<=Q_max-1e-6){
                  uq_max_i = x2(q_tilde,beta);
                  uq_max_idx_i = fmax(fmin(ulen,(int)floor(ulen*uq_max_i)),1);
-                 ub_max_i = Y[Tree.IDX[Tree.rngQuantile(uq_max_idx_i,uk+1,uk+ulen)]];
+                 ub_max_i = Y[Tree.IDX[Tree.rngQuantile(uq_max_idx_i,uk+2,uk+ulen)]];
                  //ub_max_i = get_Quantile(uq_max_idx_i,uk+1,uk+ulen,R,lr,RANK);
                }
                if(lb_max_i>ub_max_i && j >= imax){
@@ -565,14 +1160,14 @@ List MUSCLE(NumericVector &Y, NumericVector &q, double beta, bool test, bool det
                if(q_tilde<=Q_max-1e-6){
                  lq_max_j = x1(q_tilde,beta);
                  lq_max_idx_j = fmin(fmax(1,(int)ceil(llen*lq_max_j)),llen);
-                 lb_max_j = Y[Tree.IDX[Tree.rngQuantile(lq_max_idx_j,lk+1,lk+llen)]];
+                 lb_max_j = Y[Tree.IDX[Tree.rngQuantile(lq_max_idx_j,lk+2,lk+llen)]];
                  //lb_max_j = get_Quantile(lq_max_idx_j,lk+1,lk+llen,R,lr,RANK);
                }
                q_tilde = Q_tilde_max[ulen-1];
                if(q_tilde<=Q_max-1e-6){
                  uq_max_j = x2(q_tilde,beta);
                  uq_max_idx_j = fmax(fmin(ulen,(int)floor(ulen*uq_max_j)),1);
-                 ub_max_j = Y[Tree.IDX[Tree.rngQuantile(uq_max_idx_j,uk+1,uk+ulen)]];
+                 ub_max_j = Y[Tree.IDX[Tree.rngQuantile(uq_max_idx_j,uk+2,uk+ulen)]];
                  //ub_max_j = get_Quantile(uq_max_idx_j,uk+1,uk+ulen,R,lr,RANK);
                }
                if(lb_max_j>ub_max_j){
@@ -623,7 +1218,7 @@ List DMUSCLE(NumericVector &Y, NumericVector &q, double beta, int lag, bool test
     return -1;
    }
    int imax,lq_idx, uq_idx,lk,uk, llen, ulen, llen_idx, ulen_idx,lq_max_idx, uq_max_idx,idx,power,l,lp,up;
-   double lb_max, ub_max, lb, ub, q_tilde, aux_Y, aux_mu, aux_c,aux_lb, aux_ub,lq,uq, lq_max,uq_max;
+   double lb_max, ub_max, lb, ub, q_tilde, aux_Y, aux_mu, aux_c, lq_max,uq_max;
    double lb_first, ub_first, lb_last, ub_last;
    NumericVector C(n);  //optimal cost
    NumericVector J(n);  //number of jumps
@@ -635,30 +1230,20 @@ List DMUSCLE(NumericVector &Y, NumericVector &q, double beta, int lag, bool test
      L[i] = 0;
    }
    double Q_max = fmax(-log(beta),-log(1-beta)); //maximum of f on [0,1]
-   NumericVector Q_tilde(n);
-   NumericVector Q_tilde_max(n);
+   NumericVector Q_tilde_max(n, R_NegInf);
    IntegerVector Q_tilde_max_idx(n);
-   // bool get_p_min = false;
-   int p_min = 1;
-   for(int i = 0; i<n; i++){
-     l = i + 1;
-     // Rcout << "i = " << i << "\n";
-     for(int j = 0; j<n; j++){
-       if(j>=i){
-         Q_tilde[j] = pow(penfsC(j,l,q),2)/(2*l);
-       }else{
-         Q_tilde[j] = R_NegInf;
-       }
-       //Rcout << Q_tilde;
-     }
-     //Rcout << "\n";
-     Q_tilde_max[i] = max(Q_tilde);
-     Q_tilde_max_idx[i] = which_max(Q_tilde);
-   }
+   auto shifted_value = [&](int idx, int len) {
+     return q[idx] + sqrt(2*log(exp(1)*(idx + 1.0)/(len)));
+   };
+   int p_min = compute_p_min(n, Q_max, shifted_value);
+   compute_q_tilde_bounds(n, p_min, shifted_value, Q_tilde_max, Q_tilde_max_idx);
+   vector<vector<double>> q_tilde_lookup = compute_q_tilde_lookup(n, p_min, shifted_value);
 
    //return List::create(Named("Q") = Q_tilde_max);
    l = ceil(log2(n));
    WT Tree = WT(Y);
+   RangeStats Stats(Y);
+   MUSCLEBoundCache BoundCache(Y, q_tilde_lookup, p_min, beta, Q_max, false, true);
 
    //First search
    imax = 0;
@@ -670,40 +1255,37 @@ List DMUSCLE(NumericVector &Y, NumericVector &q, double beta, int lag, bool test
      ub = R_PosInf;
      power = floor(log2(i));
      for (int p = p_min; p<= power; p++) {
-       l = pow(2,p);
-       for (int k = lag; k <= i-l+1; k = k+ 2) {
-         //Rcout << "k = " << k << "\n";
-         idx = fmin(fmax(1,(int)ceil(l*beta)),l);
-         aux_Y = Y[Tree.IDX[Tree.rngQuantile(idx,k,k+l-1)]];
-         //aux_Y = get_Quantile(idx,k,k+l-1,R,lr,RANK);
-         q_tilde = pow(penfsC(i,l,q),2)/(2*l);;
-         if(q_tilde<=Q_max-1e-6){
-           lq = x1(q_tilde,beta);
-           lq_idx = fmin(fmax(1,(int)ceil(l*lq)),l);
-           if(beta==0.5){
-             uq_idx = l-lq_idx;
-           }else{
-             uq = x2(q_tilde,beta);
-             uq_idx = fmax(fmin(l,(int)floor(l*uq)),1);
-           }
-           aux_lb = Y[Tree.IDX[Tree.rngQuantile(lq_idx,k,k+l-1)]];
-           //aux_lb = get_Quantile(lq_idx,k,k+l-1,R,lr,RANK);
-           if(aux_lb>lb){
-             lb = aux_lb;
-             lk = k;
-             llen = l;
-             lp = p;
-             llen_idx = Q_tilde_max_idx[llen-1];
-           }
-           aux_ub = Y[Tree.IDX[Tree.rngQuantile(uq_idx,k,k+l-1)]];
-           //aux_ub = get_Quantile(uq_idx,k,k+l-1,R,lr,RANK);
-           if(aux_ub<ub){
-             ub = aux_ub;
-             uk = k;
-             ulen = l;
-             up = p;
-             ulen_idx = Q_tilde_max_idx[ulen-1];
-           }
+       DyadicLevelCache &level = BoundCache.level(p);
+       l = level.l;
+       int hi = i-l+1;
+       if(hi < lag){
+         continue;
+       }
+       int parity = lag & 1;
+       int last_k = hi;
+       if((last_k & 1) != parity){
+         --last_k;
+       }
+       idx = fmin(fmax(1,(int)ceil(l*beta)),l);
+       aux_Y = Y[Tree.IDX[Tree.rngQuantile(idx,last_k,last_k+l-1)]];
+       lq_idx = level.lq_idx_by_m[i+1];
+       uq_idx = level.uq_idx_by_m[i+1];
+       if(lq_idx > 0 && uq_idx > 0){
+         ArgValue lower_query = level.query_prefix(lq_idx, lag, hi, parity, true);
+         if(lower_query.value>lb){
+           lb = lower_query.value;
+           lk = lower_query.index;
+           llen = l;
+           lp = p;
+           llen_idx = Q_tilde_max_idx[llen-1];
+         }
+         ArgValue upper_query = level.query_prefix(uq_idx, lag, hi, parity, false);
+         if(upper_query.value<ub){
+           ub = upper_query.value;
+           uk = upper_query.index;
+           ulen = l;
+           up = p;
+           ulen_idx = Q_tilde_max_idx[ulen-1];
          }
        }
      }
@@ -719,7 +1301,7 @@ List DMUSCLE(NumericVector &Y, NumericVector &q, double beta, int lag, bool test
        }else{
          mu[i] = aux_Y;
        }
-       C[i] = sum((Y[Range(0,i)]-mu[i])*(beta-ifelse(Y[Range(0,i)]<mu[i],1.0,0.0)));
+       C[i] = Stats.quantileCost(0, i, mu[i], beta);
        // Rcout << "Cost at "<< i << "= "<<  C[i] << "\n";
        // Rcout << "C[i]" << i << "=" << C[i] << "\n";
        L[i] = 1;
@@ -750,7 +1332,7 @@ List DMUSCLE(NumericVector &Y, NumericVector &q, double beta, int lag, bool test
    }
    if(test == true && std::isinf(C[n-1])){
      if(details == true){
-       Rcout << "Fast test is done! No alternative solution!\n";
+       // Rcout << "Fast test is done! No alternative solution!\n";
      }
      IntegerVector left(2);
      left[0] = 1;
@@ -785,41 +1367,41 @@ List DMUSCLE(NumericVector &Y, NumericVector &q, double beta, int lag, bool test
              ub = R_PosInf;
              power = floor(log2(i-j));
              for (int p= p_min; p <= power; p++) {
-               l = pow(2,p);
-               for (int k=j+lag; k<= i-l; k = k+2) {
-                 idx = fmin(fmax(1,(int)ceil(l*beta)),l);
-                 aux_Y = Y[Tree.IDX[Tree.rngQuantile(idx,k+1,k+l)]];
-                 //aux_Y = get_Quantile(idx,k+1,k+l,R,lr,RANK);
-                 q_tilde = pow(penfsC(i-j-1,l,q),2)/(2*l);;
-                 if(q_tilde<=Q_max-1e-6){
-                   lq = x1(q_tilde,beta);
-                   lq_idx = fmin(fmax(1,(int)ceil(l*lq)),l);
-                   if(beta==0.5){
-                     uq_idx = l-lq_idx;
-                   }else{
-                     uq = x2(q_tilde,beta);
-                     uq_idx = fmax(fmin(l,(int)floor(l*uq)),1);
-                   }
-                   aux_lb = Y[Tree.IDX[Tree.rngQuantile(lq_idx,k+1,k+l)]];
-                   //aux_lb = get_Quantile(lq_idx,k+1,k+l,R,lr,RANK);
-                   if(aux_lb>lb){
-                     lb = aux_lb;
-                     lk = k;
-                     llen = l;
-                     lp = p;
-                     i_llen_idx = n - imin - 1;
-                     j_llen_idx = i - jmin - 1;
-                   }
-                   aux_ub = Y[Tree.IDX[Tree.rngQuantile(uq_idx,k+1,k+l)]];
-                   //aux_ub = get_Quantile(uq_idx,k+1,k+l,R,lr,RANK);
-                   if(aux_ub<ub){
-                     ub = aux_ub;
-                     uk = k;
-                     ulen = l;
-                     up = p;
-                     i_ulen_idx = n - imin - 1;
-                     j_ulen_idx = i - jmin - 1;
-                   }
+               DyadicLevelCache &level = BoundCache.level(p);
+               l = level.l;
+               int lo = j + lag;
+               int hi = i - l;
+               if(hi < lo){
+                 continue;
+               }
+               int parity = lo & 1;
+               int last_k = hi;
+               if((last_k & 1) != parity){
+                 --last_k;
+               }
+               idx = fmin(fmax(1,(int)ceil(l*beta)),l);
+               aux_Y = Y[Tree.IDX[Tree.rngQuantile(idx,last_k+1,last_k+l)]];
+               int m = i - j;
+               lq_idx = level.lq_idx_by_m[m];
+               uq_idx = level.uq_idx_by_m[m];
+               if(lq_idx > 0){
+                 ArgValue lower_query = level.query_shifted_one(lq_idx, lo, hi, parity, true);
+                 if(lower_query.value>lb){
+                   lb = lower_query.value;
+                   lk = lower_query.index;
+                   llen = l;
+                   lp = p;
+                   i_llen_idx = n - imin - 1;
+                   j_llen_idx = i - jmin - 1;
+                 }
+                 ArgValue upper_query = level.query_shifted_one(uq_idx, lo, hi, parity, false);
+                 if(upper_query.value<ub){
+                   ub = upper_query.value;
+                   uk = upper_query.index;
+                   ulen = l;
+                   up = p;
+                   i_ulen_idx = n - imin - 1;
+                   j_ulen_idx = i - jmin - 1;
                  }
                }
              }
@@ -839,7 +1421,7 @@ List DMUSCLE(NumericVector &Y, NumericVector &q, double beta, int lag, bool test
                if(i > aux_imax){
                  aux_imax = i;
                }
-               aux_c = sum((Y[Range(j+1,i)]-aux_mu)*(beta-ifelse(Y[Range(j+1,i)]<aux_mu,1.0,0.0)))+C[j];
+               aux_c = Stats.quantileCost(j+1, i, aux_mu, beta)+C[j];
                if(aux_c < C[i]){
                  C[i] = aux_c;
                  mu[i] = aux_mu;
@@ -971,36 +1553,39 @@ List MMUSCLE(NumericVector &Y, NumericMatrix &q_matrix, NumericVector & beta_vec
      // Rcout << "Q_max[i] = " << Q_max[i] << "\n";
      // Rcout << "l_min[i] = " << l_min[i] << "\n";
    }
-   NumericMatrix Q_tilde(num_beta,n);
    NumericMatrix Q_tilde_max(num_beta,n);
    IntegerMatrix Q_tilde_max_idx(num_beta,n);
-   bool get_p_min = false;
+   std::fill(Q_tilde_max.begin(), Q_tilde_max.end(), R_NegInf);
    int p_min = 1;
-   // Rcout << "p_min = " << p_min << "\n";
-   for(int i = 0; i<n; i++){
-     l = i + 1;
-     for(int idx_beta = 0; idx_beta < num_beta; idx_beta++){
-       for(int j = 0; j<n; j++){
-         if(j==i){
-           // Q_tilde(idx_beta,j) = pow(penfsC(j,l,q(idx_beta,_)),2)/(2*l);
-           Q_tilde(idx_beta,j) = pow(penfsCC(j,l,q_matrix(idx_beta,j)),2)/(2*l);
-           if(get_p_min == false && Q_tilde(idx_beta,j)< Q_max[i]-1e-6){
-             get_p_min = true;
-             p_min = floor(log2(l));
-           }
-         }else if(j>i){
-           Q_tilde(idx_beta,j) = pow(penfsCC(j,l,q_matrix(idx_beta,j)),2)/(2*l);
-         }else{
-           Q_tilde(idx_beta,j) = R_NegInf;
-         }
+   bool get_p_min = false;
+   for(int i = 0; i < n && get_p_min == false; ++i){
+     int l = i + 1;
+     for(int idx_beta = 0; idx_beta < num_beta && get_p_min == false; ++idx_beta){
+       double shifted = q_matrix(idx_beta, i) +
+         sqrt(2*log(exp(1)*(i + 1.0)/(l)));
+       double q_tilde = shifted * shifted / (2.0 * l);
+       if(q_tilde < Q_max[idx_beta] - 1e-6){
+         get_p_min = true;
+         p_min = floor(log2(l));
        }
-       Q_tilde_max(idx_beta,i) = max(Q_tilde(idx_beta,_));
-       Q_tilde_max_idx(idx_beta,i) = which_max(Q_tilde(idx_beta,_));
+     }
+   }
+   for(int idx_beta = 0; idx_beta < num_beta; ++idx_beta){
+     auto shifted_value = [&](int idx, int len) {
+       return q_matrix(idx_beta, idx) + sqrt(2*log(exp(1)*(idx + 1.0)/(len)));
+     };
+     NumericVector q_tilde_max_row(n, R_NegInf);
+     IntegerVector q_tilde_max_idx_row(n);
+     compute_q_tilde_bounds(n, p_min, shifted_value, q_tilde_max_row, q_tilde_max_idx_row);
+     for(int i = 0; i < n; ++i){
+       Q_tilde_max(idx_beta, i) = q_tilde_max_row[i];
+       Q_tilde_max_idx(idx_beta, i) = q_tilde_max_idx_row[i];
      }
    }
 
    l = ceil(log2(n));
    WT Tree = WT(Y);
+   RangeStats Stats(Y);
    // return List::create(Named("n") = n);
 
    //First search
@@ -1107,7 +1692,7 @@ List MMUSCLE(NumericVector &Y, NumericMatrix &q_matrix, NumericVector & beta_vec
          // Rcout << "No empty \n";
          // Rcout << "idx_beta = " << idx_beta << "\n";
          // Rcout << "mu[idx_beta,i] = " << mu(idx_beta,i) << "\n";
-         C(idx_beta,i) = sum((Y[Range(0,i)]-mu(idx_beta,i))*(beta_vec[idx_beta]-ifelse(Y[Range(0,i)]<mu(idx_beta,i),1.0,0.0)));
+         C(idx_beta,i) = Stats.quantileCost(0, i, mu(idx_beta,i), beta_vec[idx_beta]);
          // Rcout << "C[idx_beta,i] = " << C(idx_beta,i) << "\n";
        }
        Cost[i] = mean(C(_,i));
@@ -1297,7 +1882,7 @@ List MMUSCLE(NumericVector &Y, NumericMatrix &q_matrix, NumericVector & beta_vec
                }
                aux_c = 0;
                for(int idx_beta = 0; idx_beta < num_beta; idx_beta++){
-                  aux_c = aux_c + sum((Y[Range(j+1,i)]-aux_mu[idx_beta])*(beta_vec[idx_beta]-ifelse(Y[Range(j+1,i)]<aux_mu[idx_beta],1.0,0.0)));
+                  aux_c = aux_c + Stats.quantileCost(j+1, i, aux_mu[idx_beta], beta_vec[idx_beta]);
                }
                // Rcout << "cost from j+1 to i = " << aux_c/num_beta << "\n";
                aux_c = aux_c/num_beta + Cost[j];
@@ -1464,6 +2049,7 @@ List MUSCLE_FULL(NumericVector &Y, NumericVector &q, double beta, bool test, boo
     // }
 
     WT Tree = WT(Y);
+    RangeStats Stats(Y);
 
     //First search
     imax = 0;
@@ -1520,7 +2106,7 @@ List MUSCLE_FULL(NumericVector &Y, NumericVector &q, double beta, bool test, boo
        }else{
          mu[i] = aux_Y;
        }
-       C[i] = sum((Y[Range(0,i)]-mu[i])*(beta-ifelse(Y[Range(0,i)]<mu[i],1.0,0.0)));
+       C[i] = Stats.quantileCost(0, i, mu[i], beta);
        L[i] = 1;
        J[i] = 0;
      }else{
@@ -1630,7 +2216,7 @@ List MUSCLE_FULL(NumericVector &Y, NumericVector &q, double beta, bool test, boo
                if(i > aux_imax){
                  aux_imax = i;
                }
-               aux_c = sum((Y[Range(j+1,i)]-aux_mu)*(beta-ifelse(Y[Range(j+1,i)]<aux_mu,1.0,0.0)))+C[j];
+               aux_c = Stats.quantileCost(j+1, i, aux_mu, beta)+C[j];
                if(aux_c < C[i]){
                  C[i] = aux_c;
                  mu[i] = aux_mu;
@@ -1768,6 +2354,7 @@ List DMUSCLE_FULL(NumericVector &Y, NumericVector &q, double beta, int lag, bool
    // }
 
    WT Tree = WT(Y);
+   RangeStats Stats(Y);
 
    //First search
    imax = 0;
@@ -1824,7 +2411,7 @@ List DMUSCLE_FULL(NumericVector &Y, NumericVector &q, double beta, int lag, bool
        }else{
          mu[i] = aux_Y;
        }
-       C[i] = sum((Y[Range(0,i)]-mu[i])*(beta-ifelse(Y[Range(0,i)]<mu[i],1.0,0.0)));
+       C[i] = Stats.quantileCost(0, i, mu[i], beta);
        L[i] = 1;
        J[i] = 0;
      }else{
@@ -1933,7 +2520,7 @@ List DMUSCLE_FULL(NumericVector &Y, NumericVector &q, double beta, int lag, bool
                if(i > aux_imax){
                  aux_imax = i;
                }
-               aux_c = sum((Y[Range(j+1,i)]-aux_mu)*(beta-ifelse(Y[Range(j+1,i)]<aux_mu,1.0,0.0)))+C[j];
+               aux_c = Stats.quantileCost(j+1, i, aux_mu, beta)+C[j];
                if(aux_c < C[i]){
                  C[i] = aux_c;
                  mu[i] = aux_mu;
@@ -2141,4 +2728,3 @@ NumericVector simulQuantile_DMUSCLE(NumericVector &X, NumericVector &ACF, int n)
   }
   return(res);
 }
-

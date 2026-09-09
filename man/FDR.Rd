@@ -2,8 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{FDR}
 \alias{FDR}
-\title{FDR
-Compute false discovery rate (FDR) of change points estimation.}
+\title{Compute false discovery rate (FDR) of change points estimation.}
 \usage{
 FDR(left, left_hat, n)
 }
@@ -15,6 +14,5 @@ FDR(left, left_hat, n)
 \item{n}{sample size}
 }
 \description{
-FDR
 Compute false discovery rate (FDR) of change points estimation.
 }

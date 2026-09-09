@@ -2,8 +2,7 @@
 % Please edit documentation in R/MUSCLE-package.R
 \name{split}
 \alias{split}
-\title{split
-Split n observations into pieces with size m}
+\title{Split n observations into pieces with size m}
 \usage{
 split(n, m)
 }
@@ -13,6 +12,5 @@ split(n, m)
 \item{m}{splitting size}
 }
 \description{
-split
 Split n observations into pieces with size m
 }
