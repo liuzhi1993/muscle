@@ -8,6 +8,11 @@ NULL
 ## usethis namespace: end
 NULL
 
+## usethis namespace: start
+#' @importFrom stats convolve fft quantile rnorm
+## usethis namespace: end
+NULL
+
 #' Segmentation with MUSCLE.
 #' @param Y observations.
 #' @param q quantiles, can be simulated by simulQuantile_MUSCLE. It overwrites alpha if provided.

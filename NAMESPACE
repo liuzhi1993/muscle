@@ -14,4 +14,10 @@ export(simulQuantile_MUSCLE)
 export(split)
 export(teethfun)
 importFrom(Rcpp,sourceCpp)
+importFrom(stats,
+  convolve,
+  fft,
+  quantile,
+  rnorm
+)
 useDynLib(musclePST, .registration = TRUE)
