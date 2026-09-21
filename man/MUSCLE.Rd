@@ -23,15 +23,15 @@ MUSCLE(
 
 \item{beta}{target quantile, beta = 0.5 for median.}
 
-\item{dyadic}{boolian variable, indicates test statistics obtained from dyadic subintervals or on full subintervals.}
+\item{dyadic}{boolean variable, indicates test statistics obtained from dyadic subintervals or on full subintervals.}
 
-\item{split}{boolian variable, indicates whether the data will be split by subsets with size m.}
+\item{split}{boolean variable, indicates whether the data will be split by subsets with size m.}
 
 \item{m}{splitting size.}
 
-\item{details}{boolian variable, indicates whether computation details will be displayed.}
+\item{details}{boolean variable, indicates whether computation details will be displayed.}
 
-\item{deconv}{boolian variable, indicates whether the deconvolution results will be computed.}
+\item{deconv}{boolean variable, indicates whether the deconvolution results will be computed.}
 
 \item{lag}{shift lag (the size of dependency), only for deconvolution (deconv = TRUE).}
 }

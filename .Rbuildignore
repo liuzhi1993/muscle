@@ -1,3 +1,5 @@
 ^\\.DS_Store$
 ^inst/\\.DS_Store$
 ^tests/\\.DS_Store$
+^.*\.Rproj$
+^\.Rproj\.user$
