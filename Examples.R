@@ -23,12 +23,12 @@ Y = signal + noise
 ## MUSCLE
 # simulate quantiles
 tic()
-q_muscle = simulQuantile_MUSCLE(n,alpha = alpha,beta = beta)
+q_muscle = simulQuantile_MUSCLE(n, alpha = alpha, beta = beta)
 toc()
 
 # segmentation with MUSCLE
 tic()
-reg_muscle = MUSCLE(Y,q_muscle,beta)
+reg_muscle = MUSCLE(Y, q_muscle, beta = beta)
 toc()
 
 plot(1:n,Y, type = "l", lwd = 2, col = "gray",ylim = c(-40,35)
@@ -40,12 +40,12 @@ abline(v = c(390,666,1445), lty = 2, col= "green", lwd = 2 )
 ## MUSCLE-S
 # segmentation with MUSCLE-S with m = 500
 tic()
-reg_muscle_s = MUSCLE(Y,q_muscle,beta,split = TRUE, m = 500)
+reg_muscle_s = MUSCLE(Y, q_muscle, beta = beta, split = TRUE, m = 500)
 toc()
 
 # segmentation with MUSCLE-S with m = 500, print computation details
 tic()
-reg_muscle_s = MUSCLE(Y,q_muscle,beta,split = TRUE, m = 500, details = TRUE)
+reg_muscle_s = MUSCLE(Y, q_muscle, beta = beta, split = TRUE, m = 500, details = TRUE)
 toc()
 
 plot(1:n,Y, type = "l", lwd = 2, col = "gray",ylim = c(-40,35)
@@ -57,12 +57,12 @@ lines(evalStepFun(reg_muscle_s),type = "s",lwd = 2, col = "blue")
 ## M-MUSCLE
 beta_vec = c(0.25,0.5,0.75)
 # simulate quantiles
-q_mmuscle = simulQuantile_MMUSCLE(n,alpha = alpha, beta_vec = beta_vec)
+q_mmuscle = simulQuantile_MMUSCLE(n, alpha = alpha, beta_vec = beta_vec)
 
 # segmentation with M-MUSCLE
 # this can be slow!
 tic()
-reg_mmuscle = MMUSCLE(Y,q_mmuscle,beta_vec)
+reg_mmuscle = MMUSCLE(Y, q_mmuscle, beta_vec)
 toc()
 
 plot(1:n,Y, type = "l", lwd = 2, col = "gray",ylim = c(-40,35)

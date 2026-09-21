@@ -7,6 +7,7 @@
 MUSCLE(
   Y,
   q,
+  alpha = 0.1,
   beta = 0.5,
   dyadic = TRUE,
   split = FALSE,
@@ -19,7 +20,9 @@ MUSCLE(
 \arguments{
 \item{Y}{observations.}
 
-\item{q}{quantiles, can be simulated by simulQuantile_MUSCLE.}
+\item{q}{quantiles, can be simulated by simulQuantile_MUSCLE. It overwrites alpha if provided.}
+
+\item{alpha}{type I error of each multiscale test.}
 
 \item{beta}{target quantile, beta = 0.5 for median.}
 

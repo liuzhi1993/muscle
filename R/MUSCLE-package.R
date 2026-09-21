@@ -10,7 +10,8 @@ NULL
 
 #' Segmentation with MUSCLE.
 #' @param Y observations.
-#' @param q quantiles, can be simulated by simulQuantile_MUSCLE.
+#' @param q quantiles, can be simulated by simulQuantile_MUSCLE. It overwrites alpha if provided.
+#' @param alpha type I error of each multiscale test.
 #' @param beta target quantile, beta = 0.5 for median.
 #' @param dyadic boolean variable, indicates test statistics obtained from dyadic subintervals or on full subintervals.
 #' @param split boolean variable, indicates whether the data will be split by subsets with size m.
@@ -21,7 +22,7 @@ NULL
 #' @return multiscale quantile segmentation results.
 #' @export
 #'
-MUSCLE <- function(Y, q, beta = 0.5, dyadic = TRUE, split = FALSE, m = 2000,
+MUSCLE <- function(Y, q, alpha = 0.1, beta = 0.5, dyadic = TRUE, split = FALSE, m = 2000,
                    details = FALSE, deconv = FALSE, lag = 192){
   if(!is.numeric(Y) || length(Y) == 0L || any(!is.finite(Y))){
     stop("Y must be a non-empty finite numeric vector.")
@@ -29,6 +30,11 @@ MUSCLE <- function(Y, q, beta = 0.5, dyadic = TRUE, split = FALSE, m = 2000,
   if(length(beta) != 1L || !is.numeric(beta) || !is.finite(beta) ||
      beta <= 0 || beta >= 1){
     stop("beta must be a single number strictly between 0 and 1.")
+  }
+  if(missing(q)) {
+    q = simulQuantile_MUSCLE(n = length(Y), alpha = alpha, beta = beta, 
+                             exact = FALSE, lambda = 1, 
+                             deconv = deconv, lag = lag)
   }
   if(!is.numeric(q) || any(!is.finite(q))){
     stop("q must be a finite numeric vector.")
@@ -325,22 +331,26 @@ MUSCLE <- function(Y, q, beta = 0.5, dyadic = TRUE, split = FALSE, m = 2000,
 
 #' Segmentation with MMUSCLE.
 #' @param Y observations.
-#' @param q_matrix quantile matrix, can be simulated by simulQuantile_MMUSCLE.
+#' @param q_matrix quantile matrix, can be simulated by simulQuantile_MMUSCLE. It overwrites alpha if provided.
 #' @param beta_vec target quantile vector, beta = 0.25, 0.5 and 0.75 stand for first quartile, median and third quartile respectively.
 #' @return multiple multiscale quantiles segmentation results.
 #' @export
 #'
-MMUSCLE <- function(Y,q_matrix, beta_vec = c(0.25,0.5,0.75)){
+MMUSCLE <- function(Y, q_matrix, alpha = 0.1, beta_vec = c(0.25,0.5,0.75)){
   if(!is.numeric(Y) || length(Y) == 0L || any(!is.finite(Y))){
     stop("Y must be a non-empty finite numeric vector.")
-  }
-  if(!is.numeric(q_matrix) || length(q_matrix) == 0L ||
-     any(!is.finite(q_matrix)) || ncol(as.matrix(q_matrix)) < length(Y)){
-    stop("q_matrix must contain finite quantiles for every observation.")
   }
   if(!is.numeric(beta_vec) || length(beta_vec) == 0L ||
      any(!is.finite(beta_vec)) || any(beta_vec <= 0) || any(beta_vec >= 1)){
     stop("beta_vec must contain numbers strictly between 0 and 1.")
+  }
+  if(missing(q_matrix)) {
+    q_matrix = simulQuantile_MMUSCLE(n = length(Y), alpha = alpha, 
+                                     beta_vec = beta_vec)
+  }
+  if(!is.numeric(q_matrix) || length(q_matrix) == 0L ||
+     any(!is.finite(q_matrix)) || ncol(as.matrix(q_matrix)) < length(Y)){
+    stop("q_matrix must contain finite quantiles for every observation.")
   }
   return(.MMUSCLE(Y,q_matrix,beta_vec,FALSE,FALSE))
 }
