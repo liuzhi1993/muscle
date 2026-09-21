@@ -337,6 +337,7 @@ MUSCLE <- function(Y, q, alpha = 0.1, beta = 0.5, dyadic = TRUE, split = FALSE, 
 #' Segmentation with MMUSCLE.
 #' @param Y observations.
 #' @param q_matrix quantile matrix, can be simulated by simulQuantile_MMUSCLE. It overwrites alpha if provided.
+#' @param alpha type I error of each multiscale test.
 #' @param beta_vec target quantile vector, beta = 0.25, 0.5 and 0.75 stand for first quartile, median and third quartile respectively.
 #' @return multiple multiscale quantiles segmentation results.
 #' @export

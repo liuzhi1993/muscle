@@ -11,6 +11,8 @@ MMUSCLE(Y, q_matrix, alpha = 0.1, beta_vec = c(0.25, 0.5, 0.75))
 
 \item{q_matrix}{quantile matrix, can be simulated by simulQuantile_MMUSCLE. It overwrites alpha if provided.}
 
+\item{alpha}{type I error of each multiscale test.}
+
 \item{beta_vec}{target quantile vector, beta = 0.25, 0.5 and 0.75 stand for first quartile, median and third quartile respectively.}
 }
 \value{
