@@ -1,8 +1,5 @@
-# setwd("/Users/liuzhi1993/Desktop/MUSCLE_Paper_Correction")
-
-# 安装 muscle 0.1.3（只保留一种安装方式，运行前取消对应行的注释）
-install.packages("muscle_0.1.3.tar.gz", repos = NULL, type = "source")
-# remotes::install_github("liuzhi1993/muscle")
+library(devtools)
+install_github("liuzhi1993/muscle")
 
 library(muscle)
 packageVersion("muscle")
